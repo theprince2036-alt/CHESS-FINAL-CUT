@@ -2,18 +2,15 @@
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <title>Chess: Final Cut</title>
 <!--
-CHESS: FINAL CUT (lean edition, single file)
-CONTROLS: click/tap a piece, then a highlighted square. Right-click or Esc cancels.
-  Keyboard: arrow keys move the cursor, Enter selects/moves, Space skips a cinematic.
-  Any click during a cinematic skips it to the end state.
-SETTINGS (gear icon): mode (two players / vs computer), difficulty (Easy/Medium/Hard),
-  cinematic intensity (Off/Subtle/Standard/Insane), speed (0.5x-2x), volume, mute.
-  Saved to localStorage; silently falls back if storage is unavailable.
-DEBUG: add #debug to the URL, then open the console. Runs perft self-checks (start position, depth 1-3: 20, 400, 8902).
-KNOWN LIMITATIONS: no timed mode; no board themes or piece styles; no drag-and-drop (click-to-move only);
-  no board flip; promotion picker is a row, not a radial menu; no promotion energy arcs; lifted pieces do not
-  stretch their shadow; reduced-motion only disables shake/zoom/particles/slow-mo; AI search runs on the main thread;
-  no Three.js renderer (layered CSS 3/4 view); no tab-pause timeline (tab hide skips the cinematic).
+CHESS: FINAL CUT (single-file browser game)
+CONTROLS: click/tap or drag a piece, then choose a legal square. Right-click or Esc cancels.
+  Keyboard: focus the board, use arrow keys to navigate, Enter to select/move, Space to skip a cinematic.
+  Timed games start when the intro is dismissed; the side to move's clock runs during cinematics.
+SETTINGS (gear icon): two-player/AI mode, AI difficulty, cinematic intensity/speed, audio,
+  narration, board and piece styles, and clock duration/increment. Settings persist in localStorage.
+DEBUG: append #debug to the URL to run perft checks in the console (20, 400, 8902).
+KNOWN LIMITATIONS: no board flip or timed-game pause; the mobile side panel stacks below the board
+  rather than opening as a drawer. Rendering uses layered CSS, and AI search runs on the main thread.
 -->
 <style>
 :root{--amber:#ffb23e;--crimson:#c8102e;--lt:#c9b48a;--dk:#3a3f4a}
@@ -126,7 +123,7 @@ footer{display:flex;gap:8px;flex-wrap:wrap;justify-content:center;padding:12px}
 <body>
 <header><h1>Chess <span>Final Cut</span></h1><div id="info"></div><button id="gear" aria-label="Settings">⚙ Settings</button></header>
 <main>
-  <div class="stageWrap"><div id="stage"><div id="shaker"><div id="wrap"><div id="board"></div><div id="layer"></div></div></div></div></div>
+  <div class="stageWrap"><div id="stage"><div id="shaker"><div id="wrap"><div id="board" role="grid" tabindex="0" aria-label="Chessboard" aria-rowcount="8" aria-colcount="8"></div><div id="layer"></div></div></div></div></div>
   <aside><div id="turn"></div><div id="clock"></div><div id="cap"></div><ol id="moves" aria-label="Move list"></ol></aside>
 </main>
 <footer>
@@ -416,6 +413,7 @@ function introReady(){
 function enterGame(){
   introDone=true;introTimers.forEach(clearTimeout);introTimers=[];
   const el=$('intro');el.classList.add('out');introLetterbox(false);
+  clockStart();
   setTimeout(()=>{el.hidden=true;},700);
 }
 function dismissIntro(){
@@ -452,7 +450,7 @@ function populateThemes(){
 const fmtT=ms=>{const s=Math.max(0,Math.ceil(ms/1000));return String(Math.floor(s/60)).padStart(2,'0')+':'+String(s%60).padStart(2,'0');};
 /* Clock rule: the side to move burns time continuously, including during cinematics. Skipping does not stop the clock. */
 function clockStart(){
-  clearInterval(clkTimer);if(!S.time)return;
+  clearInterval(clkTimer);if(!S.time||!introDone)return;
   clkTimer=setInterval(()=>{
     if(G.over){clearInterval(clkTimer);return;}
     const i=G.s.t==='w'?0:1;clk[i]-=200;
@@ -490,7 +488,7 @@ function sayMove(san,st){
 const $=id=>document.getElementById(id);
 const board=$('board'),layer=$('layer'),wrap=$('wrap'),shaker=$('shaker'),stage=$('stage');
 const sqEls=[];
-for(let i=0;i<64;i++){const d=document.createElement('div');d.dataset.i=i;board.appendChild(d);sqEls.push(d);}
+for(let i=0;i<64;i++){const d=document.createElement('div');d.id='sq-'+i;d.dataset.i=i;d.setAttribute('role','gridcell');board.appendChild(d);sqEls.push(d);}
 const G={s:start(),keys:[],sans:[],past:[],future:[],last:null,sel:-1,kc:52,kbd:false,busy:false,over:false,thinking:false,promo:null};
 let gameId=0,aiTok=0,partCount=0,skipping=false;
 const liveAnims=new Set();
@@ -508,13 +506,25 @@ function render(st=G.s){
   const chkK=inCheck(st,st.t)?st.b.indexOf(st.t+'k'):-1;
   const tset=new Map();
   if(G.sel>=0)legal(st).filter(m=>m.f===G.sel).forEach(m=>tset.set(m.t,m.ep||st.b[m.t]?'cap':'mv'));
+  const pieceNames={p:'pawn',n:'knight',b:'bishop',r:'rook',q:'queen',k:'king'};
   sqEls.forEach((d,i)=>{
     let c='sq '+(((i>>3)+(i&7))%2?'d':'l');
     if(i===G.sel)c+=' sel';if(tset.has(i))c+=' '+tset.get(i);
     if(i===chkK)c+=' chk';if(G.last&&(i===G.last.f||i===G.last.t))c+=' last';
     if(G.kbd&&i===G.kc)c+=' kc';
     d.className=c;
+    const p=st.b[i],file='abcdefgh'[i&7],rank=8-(i>>3);
+    const labels=[file+rank,p?(p[0]==='w'?'white ':'black ')+pieceNames[p[1]]:'empty'];
+    if(i===G.sel)labels.push('selected');
+    if(tset.has(i))labels.push(tset.get(i)==='cap'?'legal capture':'legal move');
+    if(i===chkK)labels.push('in check');
+    d.setAttribute('aria-rowindex',String((i>>3)+1));
+    d.setAttribute('aria-colindex',String((i&7)+1));
+    d.setAttribute('aria-selected',String(i===G.sel));
+    d.setAttribute('aria-label',labels.join(', '));
   });
+  board.setAttribute('aria-activedescendant','sq-'+G.kc);
+  board.setAttribute('aria-label',(st.t==='w'?'White':'Black')+' to move'+(chkK>=0?', king in check':'')+'. Chessboard.');
   layer.innerHTML='';
   st.b.forEach((p,i)=>{if(!p)return;const e=document.createElement('div');
     e.className='pc '+p[0];e.dataset.i=i;e.dataset.p=p[1];
@@ -693,7 +703,7 @@ async function playMove(m){
   await animateMove(m);
   if(id!==gameId)return;
   G.past.push({s,keys:G.keys,sans:G.sans,m});G.future=[];
-  G.s=after;G.keys=keysA;G.sans=[...G.sans,sanStr];G.last=m;
+  G.s=after;G.keys=keysA;G.sans=[...G.sans,sanStr];G.last=m;G.kc=m.t;
   if(S.time)clk[s.t==='w'?0:1]+=S.inc*1000;
   await new Promise(r=>setTimeout(r,skipping?0:T(400)));
   if(id!==gameId)return;
@@ -753,6 +763,7 @@ async function rewindOne(){
   await animateRewind(m);
   if(id!==gameId)return;
   G.s=e.s;G.keys=e.keys;G.sans=e.sans;G.last=G.past.length?G.past[G.past.length-1].m:null;
+  G.kc=m.f;
   render();moveList();G.busy=false;
   const cap=e.s.b[m.t];
   if(cap&&!m.ep){const ce=elAt(m.t);if(ce)anim(ce,[{opacity:0,transform:'scale(.4)'},{opacity:1,transform:'scale(1)'}],{duration:400,fill:'none'});}
@@ -773,6 +784,7 @@ async function redo(){
   await animateMove(f.m);
   if(id!==gameId)return;
   G.s=f.s;G.keys=f.keys;G.sans=f.sans;G.last=f.m;
+  G.kc=f.m.t;
   render();moveList();G.busy=false;
   updateHUD();
 }
